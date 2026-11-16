@@ -69,5 +69,15 @@
   "↶  Undo move": "↶  Undo move",
   "Piece set": "Piece set",
   "Hide sidebar": "Hide sidebar",
-  "Show sidebar": "Show sidebar"
+  "Show sidebar": "Show sidebar",
+  "%1 is thinking…": "%1 is thinking…",
+  "VS AGENT": "VS AGENT",
+  "Play against %1": "Play against %1",
+  "Ask again": "Ask again",
+  "%1 took too long to answer.": "%1 took too long to answer.",
+  "%1 can't answer on its own yet. Choose another default agent, or play the computer.": "%1 can't answer on its own yet. Choose another default agent, or play the computer.",
+  "%1 is not installed.": "%1 is not installed.",
+  "%1 stopped without answering.": "%1 stopped without answering.",
+  "%1 stopped without answering: %2": "%1 stopped without answering: %2",
+  "%1 did not answer with a legal move.": "%1 did not answer with a legal move."
 }

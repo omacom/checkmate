@@ -602,6 +602,115 @@ private slots:
         QVERIFY(next.legal().empty());
     }
 
+    void agentCommandsAndAnswers() {
+        // Each harness has its own way to answer once and exit; one without is not offered.
+        QCOMPARE(AgentPlayer::command("claude","go"),(QStringList{"claude","-p","go"}));
+        QCOMPARE(AgentPlayer::command("codex","go"),(QStringList{"codex","exec","--skip-git-repo-check","go"}));
+        QCOMPARE(AgentPlayer::command("opencode","go"),(QStringList{"opencode","run","go"}));
+        QVERIFY(AgentPlayer::command("freebuff","go").isEmpty());
+        QCOMPARE(AgentPlayer::displayName("claude"),QString("Claude Code"));
+        QCOMPARE(AgentPlayer::displayName("something-new"),QString("something-new"));
+
+        auto p=Chess::Position::initial().after({12,28});
+        const QString asked=AgentPlayer::prompt(p,{"e4"});
+        QVERIFY(asked.contains("as Black"));
+        QVERIFY(asked.contains(QString::fromStdString(p.fen())));
+        QVERIFY(asked.contains("1. e4"));
+        QVERIFY(asked.contains("e7e5"));
+        Chess::Move move;
+        QVERIFY(AgentPlayer::parse("e7e5",p,&move));
+        QCOMPARE(move,(Chess::Move{52,36}));
+        // An agent that thinks aloud ends on its choice, and may write it as the game does.
+        QVERIFY(AgentPlayer::parse("I considered e7e5 but **g8f6** develops a piece.",p,&move));
+        QCOMPARE(move,(Chess::Move{62,45}));
+        QVERIFY(AgentPlayer::parse("My move: Nf6.",p,&move));
+        QCOMPARE(move,(Chess::Move{62,45}));
+        // White's own move, a square alone, or prose name nothing Black can play.
+        QVERIFY(!AgentPlayer::parse("e2e4",p,&move));
+        QVERIFY(!AgentPlayer::parse("I resign.",p,&move));
+        const auto promotion=Chess::Position::fromFen("8/P6k/8/8/8/8/8/K7 w - - 0 1");
+        QVERIFY(AgentPlayer::parse("a7a8q",promotion,&move));
+        QCOMPARE(move.promotion,int(Chess::Queen));
+    }
+
+    void agentPlaysTheOtherSide() {
+        QTemporaryDir dir;
+        const QString defaults=dir.filePath("agent");
+        auto script=[&](const QString &name,const QString &body) {
+            const QString path=dir.filePath(name);
+            write(path,("#!/bin/sh\n"+body+"\n").toUtf8());
+            QFile::setPermissions(path,QFile::ReadOwner|QFile::WriteOwner|QFile::ExeOwner);
+            return path;
+        };
+        Backend game(":memory:");
+        // A game in memory never looks at the user's own agent, and with none chosen there is nobody to play.
+        QVERIFY(!game.agentAvailable());
+        game.agentPlayer().setDefaultsFile(defaults);
+        QVERIFY(!game.agentAvailable());
+        write(defaults,"claude\n");
+        // The prompt arrives as the last argument, in a folder that holds nothing of the user's.
+        game.agentPlayer().setCommandOverride({script("good","case \"$1\" in *'FEN'*e7e5*) ;; *) exit 3;; esac\n[ -z \"$(ls -A)\" ] || exit 4\necho 'I will play e7e5.'")});
+        QVERIFY(game.agentAvailable());
+        QCOMPARE(game.agentName(),QString("Claude Code"));
+        game.newGame(true,0,true,true);
+        QVERIFY(game.agent() && game.computer());
+        QVERIFY(game.move(12,28));
+        QTRY_VERIFY_WITH_TIMEOUT(game.thinking(),2000);
+        QTRY_COMPARE_WITH_TIMEOUT(game.moves(),(QStringList{"e4","e5"}),5000);
+        QVERIFY(!game.thinking() && !game.agentStalled() && game.whiteTurn());
+        // Undo takes back both moves, as against the computer.
+        game.undo();
+        QVERIFY(game.moves().isEmpty());
+
+        // Nonsense is asked about once more, then the game waits on the player with the reason shown.
+        const QString count=dir.filePath("count");
+        game.agentPlayer().setCommandOverride({script("bad","echo x >> '"+count+"'\necho 'Checkmate in one, surely.'")});
+        QVERIFY(game.move(12,28));
+        QTRY_VERIFY_WITH_TIMEOUT(game.agentStalled(),5000);
+        QVERIFY(game.error().contains("Claude Code"));
+        QVERIFY(!game.thinking());
+        QCOMPARE(lines(count),2);
+        QCOMPARE(game.moves().size(),1);
+        // Asking again with an agent that answers carries on.
+        game.agentPlayer().setCommandOverride({script("good2","echo g8f6")});
+        game.askAgentAgain();
+        QTRY_COMPARE_WITH_TIMEOUT(game.moves().size(),2,5000);
+        QVERIFY(!game.agentStalled());
+        QVERIFY(game.error().isEmpty());
+
+        // A failing agent's own last words are the reason.
+        game.agentPlayer().setCommandOverride({script("broke","echo 'Not signed in' >&2\nexit 1")});
+        QVERIFY(game.move(11,27));
+        QTRY_VERIFY_WITH_TIMEOUT(game.agentStalled(),5000);
+        QVERIFY(game.error().contains("Not signed in"));
+        // A slow one is given up on, and a new game stops one mid-thought without a late move arriving.
+        game.agentPlayer().setCommandOverride({script("slow","sleep 5\necho e7e5")});
+        game.agentPlayer().setTimeout(300);
+        game.newGame(true,0,true,true);
+        QVERIFY(!game.agentStalled() && game.error().isEmpty());
+        QVERIFY(game.move(12,28));
+        QTRY_VERIFY_WITH_TIMEOUT(game.agentStalled(),5000);
+        game.agentPlayer().setTimeout(60000);
+        game.askAgentAgain();
+        QVERIFY(game.thinking());
+        game.newGame(false,0);
+        QVERIFY(!game.thinking() && !game.agent());
+        QTest::qWait(300);
+        QVERIFY(game.moves().isEmpty());
+
+        // The opponent is saved with the game.
+        const QString save=dir.filePath("game.json");
+        {
+            Backend saved(save);
+            saved.agentPlayer().setDefaultsFile(defaults);
+            saved.agentPlayer().setCommandOverride({script("good3","echo e7e5")});
+            saved.newGame(true,0,true,true);
+        }
+        Backend restored(save);
+        restored.agentPlayer().setDefaultsFile(QString());
+        QVERIFY(restored.agent() && restored.computer());
+    }
+
     void sculptedSurfacesFaceTheirNormals() {
         SculptGeometry geometry;
         for(int design=0;design<4;++design) for(int kind=1;kind<=6;++kind) for(int part=0;part<6;++part) {
@@ -822,6 +931,23 @@ private slots:
         QTRY_VERIFY(dialog->property("opened").toBool());
         QTest::keyClick(window,Qt::Key_Escape);
         QTRY_VERIFY(!dialog->property("visible").toBool());
+        {
+            // With a default agent that can answer on its own, the dialog offers it by name after the other two.
+            auto *mode=window->findChild<QObject *>("mode");
+            QVERIFY(mode);
+            QCOMPARE(mode->property("count").toInt(),2);
+            QVERIFY(write(dir.filePath("agent"),"codex\n"));
+            backend.agentPlayer().setDefaultsFile(dir.filePath("agent"));
+            backend.agentPlayer().setCommandOverride({"/bin/true"});
+            QTest::keyClick(window,Qt::Key_N);
+            QTRY_VERIFY(dialog->property("opened").toBool());
+            QCOMPARE(mode->property("count").toInt(),3);
+            QVERIFY(mode->property("model").toStringList().last().contains("Codex"));
+            QTest::keyClick(window,Qt::Key_Escape);
+            QTRY_VERIFY(!dialog->property("visible").toBool());
+            backend.agentPlayer().setDefaultsFile(QString());
+            backend.agentPlayer().setCommandOverride({});
+        }
         auto *board=window->findChild<QQuickItem *>("board");
         QVERIFY(board);
         {

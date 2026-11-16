@@ -35,7 +35,7 @@ ApplicationWindow {
     if (backend.outcome === "material") return qsTr("Draw · insufficient material")
     if (backend.outcome === "fifty-moves") return qsTr("Draw · fifty-move rule")
     if (backend.outcome === "repetition") return qsTr("Draw · threefold repetition")
-    if (backend.thinking) return qsTr("Considering the next move…")
+    if (backend.thinking) return backend.agent ? qsTr("%1 is thinking…").arg(backend.agentName) : qsTr("Considering the next move…")
     if (backend.checked) return backend.whiteTurn ? qsTr("White is in check") : qsTr("Black is in check")
     return backend.whiteTurn ? qsTr("White to move") : qsTr("Black to move")
   }
@@ -224,10 +224,10 @@ ApplicationWindow {
             spacing: 18
             RowLayout {
               Layout.fillWidth: true
-              Text { text: backend.computer ? qsTr("VS COMPUTER") : qsTr("TWO PLAYERS"); font.pixelSize: 10; font.letterSpacing: Qt.application.layoutDirection === Qt.RightToLeft ? 0 : 2; color: window.muted; Layout.fillWidth: true }
+              Text { text: backend.agent ? qsTr("VS AGENT") : backend.computer ? qsTr("VS COMPUTER") : qsTr("TWO PLAYERS"); font.pixelSize: 10; font.letterSpacing: Qt.application.layoutDirection === Qt.RightToLeft ? 0 : 2; color: window.muted; Layout.fillWidth: true }
               Text { text: "●"; color: window.setColors[backend.pieceSet]; font.pixelSize: 9 }
             }
-            Text { text: backend.computer ? window.difficultyNames[backend.difficulty] : qsTr("One board. Two minds."); color: theme.foreground; font.family: "serif"; font.pixelSize: 23; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+            Text { text: backend.agent ? backend.agentName : backend.computer ? window.difficultyNames[backend.difficulty] : qsTr("One board. Two minds."); color: theme.foreground; font.family: "serif"; font.pixelSize: 23; Layout.fillWidth: true; wrapMode: Text.WordWrap }
             Repeater {
               model: [false,true]
               Rectangle {
@@ -243,7 +243,7 @@ ApplicationWindow {
                   Text { text: modelData ? "♙" : "♟"; font.pixelSize: 29; color: theme.foreground }
                   ColumnLayout {
                     spacing: 3
-                    Text { text: backend.computer ? (backend.humanWhite === modelData ? qsTr("You") : qsTr("Computer")) : (modelData ? qsTr("Player 1") : qsTr("Player 2")); color: theme.foreground; font.pixelSize: 14 }
+                    Text { text: backend.computer ? (backend.humanWhite === modelData ? qsTr("You") : backend.agent ? backend.agentName : qsTr("Computer")) : (modelData ? qsTr("Player 1") : qsTr("Player 2")); color: theme.foreground; font.pixelSize: 14 }
                     Text { text: modelData ? qsTr("White") : qsTr("Black"); color: window.muted; font.pixelSize: 11 }
                   }
                   Item { Layout.fillWidth: true }
@@ -295,7 +295,9 @@ ApplicationWindow {
         id: errorRow
         anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 14 }
         Text { text: backend.error; color: theme.foreground; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-        FlatButton { text: qsTr("Dismiss"); onClicked: backend.dismissError() }
+        // A stalled agent keeps its message up until the player asks again, undoes, or starts over.
+        FlatButton { objectName: "askAgain"; text: qsTr("Ask again"); visible: backend.agentStalled; onClicked: backend.askAgentAgain() }
+        FlatButton { text: qsTr("Dismiss"); visible: !backend.agentStalled; onClicked: backend.dismissError() }
       }
     }
   }
@@ -317,20 +319,23 @@ ApplicationWindow {
     }
     Material.roundedScale: theme.radius
     onOpened: {
-      mode.currentIndex = backend.computer ? 0 : 1
+      backend.refreshAgent()
+      mode.currentIndex = backend.agent && backend.agentAvailable ? 2 : backend.computer ? 0 : 1
       level.currentIndex = backend.difficulty
       side.currentIndex = backend.humanWhite ? 0 : 1
       mode.forceActiveFocus()
     }
-    onAccepted: { backend.newGame(mode.currentIndex === 0,level.currentIndex,side.currentIndex === 0); board.resetCamera() }
+    onAccepted: { backend.newGame(mode.currentIndex !== 1,level.currentIndex,side.currentIndex === 0,mode.currentIndex === 2); board.resetCamera() }
     contentItem: ColumnLayout {
       LayoutMirroring.enabled: Qt.application.layoutDirection === Qt.RightToLeft
       LayoutMirroring.childrenInherit: true
       spacing: 16
       Label { text: backend.canUndo ? qsTr("Starting a new match replaces the saved game.") : qsTr("Choose your opponent and settle in."); wrapMode: Text.WordWrap; Layout.fillWidth: true }
-      ComboBox { leftPadding: mirrored ? 40 : 16; rightPadding: mirrored ? 16 : 40; id: mode; objectName: "mode"; Layout.fillWidth: true; model: [qsTr("Play against the computer"),qsTr("Two players · same device")]; Material.roundedScale: theme.radius }
+      ComboBox { leftPadding: mirrored ? 40 : 16; rightPadding: mirrored ? 16 : 40; id: mode; objectName: "mode"; Layout.fillWidth: true; // The default Omarchy agent joins the list when it can answer on its own; it comes last so the others keep their places.
+        model: backend.agentAvailable ? [qsTr("Play against the computer"),qsTr("Two players · same device"),qsTr("Play against %1").arg(backend.agentName)]
+                                      : [qsTr("Play against the computer"),qsTr("Two players · same device")]; Material.roundedScale: theme.radius }
       ComboBox { leftPadding: mirrored ? 40 : 16; rightPadding: mirrored ? 16 : 40; id: level; Layout.fillWidth: true; model: window.difficultyNames; visible: mode.currentIndex === 0; Material.roundedScale: theme.radius }
-      ComboBox { leftPadding: mirrored ? 40 : 16; rightPadding: mirrored ? 16 : 40; id: side; Layout.fillWidth: true; model: [qsTr("Play as White"),qsTr("Play as Black")]; visible: mode.currentIndex === 0; Material.roundedScale: theme.radius }
+      ComboBox { leftPadding: mirrored ? 40 : 16; rightPadding: mirrored ? 16 : 40; id: side; Layout.fillWidth: true; model: [qsTr("Play as White"),qsTr("Play as Black")]; visible: mode.currentIndex !== 1; Material.roundedScale: theme.radius }
     }
   }
   Dialog {

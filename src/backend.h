@@ -1,6 +1,7 @@
 #pragma once
 
 #include "chess.h"
+#include "agentplayer.h"
 #include <QObject>
 #include <QFutureWatcher>
 #include <QVariantList>
@@ -26,6 +27,10 @@ class Backend : public QObject {
   Q_PROPERTY(bool computer READ computer NOTIFY changed)
   Q_PROPERTY(bool humanWhite READ humanWhite NOTIFY changed)
   Q_PROPERTY(int difficulty READ difficulty NOTIFY changed)
+  Q_PROPERTY(bool agent READ agent NOTIFY changed)
+  Q_PROPERTY(QString agentName READ agentName NOTIFY changed)
+  Q_PROPERTY(bool agentAvailable READ agentAvailable NOTIFY changed)
+  Q_PROPERTY(bool agentStalled READ agentStalled NOTIFY changed)
   Q_PROPERTY(int pieceSet READ pieceSet WRITE setPieceSet NOTIFY preferencesChanged)
   Q_PROPERTY(bool reducedMotion READ reducedMotion WRITE setReducedMotion NOTIFY preferencesChanged)
   Q_PROPERTY(bool autoRotate READ autoRotate WRITE setAutoRotate NOTIFY preferencesChanged)
@@ -52,6 +57,14 @@ public:
   bool computer() const { return m_computer; }
   bool humanWhite() const { return m_humanWhite; }
   int difficulty() const { return m_difficulty; }
+  // The opponent is the user's default Omarchy agent rather than the built-in player.
+  bool agent() const { return m_agent; }
+  // The agent in the game while one is being played, and the one a new game would be against otherwise.
+  QString agentName() const { return m_agentPlayer.name(); }
+  bool agentAvailable() const { return m_agentPlayer.available(); }
+  // The agent failed to move; the game waits for the player to ask again, undo, or start over.
+  bool agentStalled() const { return m_agentStalled; }
+  AgentPlayer &agentPlayer() { return m_agentPlayer; }
   int pieceSet() const { return m_pieceSet; }
   bool reducedMotion() const { return m_reducedMotion; }
   bool autoRotate() const { return m_autoRotate; }
@@ -65,7 +78,10 @@ public:
   Q_INVOKABLE bool move(int from, int to, int promotion = Chess::Empty);
   Q_INVOKABLE void promote(int kind);
   Q_INVOKABLE void cancelSelection();
-  Q_INVOKABLE void newGame(bool computer, int difficulty, bool humanWhite = true);
+  Q_INVOKABLE void newGame(bool computer, int difficulty, bool humanWhite = true, bool agent = false);
+  Q_INVOKABLE void askAgentAgain();
+  // The default agent is read when asked for, so the dialog asks for a fresh look as it opens.
+  Q_INVOKABLE void refreshAgent() { emit changed(); }
   Q_INVOKABLE void undo();
   Q_INVOKABLE void dismissError();
   void setPieceSet(int value);
@@ -93,7 +109,8 @@ private:
   int m_selected = -1;
   Chess::Move m_pending;
   QString m_outcome, m_error, m_savePath;
-  bool m_computer = true, m_humanWhite = true, m_thinking = false;
+  bool m_computer = true, m_humanWhite = true, m_thinking = false, m_agent = false, m_agentStalled = false;
+  AgentPlayer m_agentPlayer;
   int m_difficulty = 1, m_pieceSet = 0;
   bool m_reducedMotion = false, m_autoRotate = false, m_sidebar = true, m_saveBlocked = false, m_saveFailed = false;
   unsigned m_generation = 0;
