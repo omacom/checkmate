@@ -21,7 +21,17 @@ QString adjudicate(const Chess::Position &p, const std::vector<Chess::Move> &leg
 }
 }
 
-Backend::Backend(const QString &savePath, QObject *parent) : QObject(parent), m_savePath(savePath) {
+// A game kept only in memory is a test's or a headless command's, and never reaches for the user's own agent.
+Backend::Backend(const QString &savePath, QObject *parent)
+    : QObject(parent), m_savePath(savePath), m_agentPlayer(savePath == ":memory:" ? QString() : AgentPlayer::omarchyDefaultsFile()) {
+  connect(&m_agentPlayer,&AgentPlayer::answered,this,[this](Chess::Move move) {
+    m_thinking = false;
+    if (std::find(m_legal.begin(),m_legal.end(),move) != m_legal.end()) apply(move);
+    else { m_agentStalled = true; m_error = tr("%1 did not answer with a legal move.").arg(agentName()); emit changed(); }
+  });
+  connect(&m_agentPlayer,&AgentPlayer::failed,this,[this](const QString &reason) {
+    m_thinking = false; m_agentStalled = true; m_error = reason; emit changed();
+  });
   if (m_savePath.isEmpty()) m_savePath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/game.json";
   m_repetitions[position().key()] = 1;
   if (m_savePath != ":memory:") {
@@ -96,11 +106,19 @@ void Backend::apply(Chess::Move move) {
 void Backend::cancelComputer() {
   ++m_generation;
   if (m_cancel) m_cancel->store(true);
+  m_agentPlayer.cancel();
+  if (m_agentStalled) { m_agentStalled = false; m_error.clear(); }
   m_thinking = false;
 }
 void Backend::scheduleComputer() {
   if (!m_computer || whiteTurn() == m_humanWhite || finished() || m_thinking) return;
   m_thinking = true;
+  if (m_agent) {
+    // The agent answers in its own time, in a process of its own; its move or its failure comes back as a signal.
+    m_agentPlayer.ask(position(),m_notation);
+    emit changed();
+    return;
+  }
   auto cancel = m_cancel = std::make_shared<std::atomic_bool>(false);
   const auto generation = m_generation;
   const auto p = position();
@@ -119,11 +137,11 @@ void Backend::scheduleComputer() {
   watcher->setFuture(QtConcurrent::run([p,difficulty,cancel,history] { return Chess::bestMove(p,difficulty,cancel,history); }));
   emit changed();
 }
-void Backend::newGame(bool computer, int difficulty, bool humanWhite) {
+void Backend::newGame(bool computer, int difficulty, bool humanWhite, bool agent) {
   cancelComputer();
   if (!ownsSave()) return;
   m_saveBlocked = false; m_error.clear();
-  m_computer = computer; m_difficulty = std::clamp(difficulty,0,2); m_humanWhite = humanWhite;
+  m_computer = computer || agent; m_agent = agent; m_difficulty = std::clamp(difficulty,0,2); m_humanWhite = humanWhite;
   m_positions = {Chess::Position::initial()}; m_moves.clear(); m_notation.clear(); m_pending = {}; m_selected = -1;
   m_repetitions.clear(); m_repetitions[position().key()] = 1;
   refresh(); save(); scheduleComputer();
@@ -137,6 +155,12 @@ void Backend::undo() {
   } while (m_computer && !m_moves.empty() && whiteTurn() != m_humanWhite);
   m_selected = -1; m_pending = {};
   refresh(); save(); scheduleComputer();
+}
+void Backend::askAgentAgain() {
+  if (!m_agentStalled) return;
+  cancelComputer();
+  scheduleComputer();
+  emit changed();
 }
 void Backend::dismissError() { m_error.clear(); emit changed(); }
 void Backend::setPieceSet(int value) {
@@ -159,7 +183,7 @@ void Backend::save() {
   if (m_savePath == ":memory:" || m_saveBlocked || !ownsSave()) return;
   QJsonArray moves;
   for (auto m : m_moves) moves.append(QJsonArray{m.from,m.to,m.promotion});
-  QJsonObject data{{"version",1},{"moves",moves},{"computer",m_computer},{"humanWhite",m_humanWhite},
+  QJsonObject data{{"version",1},{"moves",moves},{"computer",m_computer},{"agent",m_agent},{"humanWhite",m_humanWhite},
                    {"difficulty",m_difficulty},{"pieceSet",m_pieceSet},{"reducedMotion",m_reducedMotion},{"autoRotate",m_autoRotate},{"sidebar",m_sidebar}};
   QDir().mkpath(QFileInfo(m_savePath).absolutePath());
   QSaveFile file(m_savePath);
@@ -199,7 +223,7 @@ void Backend::restore() {
     m_positions.push_back(position().after(move)); m_moves.push_back(move);
     ++m_repetitions[position().key()];
   }
-  m_computer = data["computer"].toBool(true); m_humanWhite = data["humanWhite"].toBool(true);
+  m_agent = data["agent"].toBool(); m_computer = data["computer"].toBool(true) || m_agent; m_humanWhite = data["humanWhite"].toBool(true);
   m_difficulty = std::clamp(data["difficulty"].toInt(1),0,2); m_pieceSet = std::clamp(data["pieceSet"].toInt(),0,3);
   m_reducedMotion = data["reducedMotion"].toBool(); m_autoRotate = data["autoRotate"].toBool(); m_sidebar = data["sidebar"].toBool(true);
 }
